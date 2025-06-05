@@ -436,6 +436,7 @@ def write_header(docstrings, macros, out_file=sys.stdout):
 #define __DOC6(n1, n2, n3, n4, n5, n6)                   n1##_##n2##_##n3##_##n4##_##n5##_##n6
 #define __DOC7(n1, n2, n3, n4, n5, n6, n7)               n1##_##n2##_##n3##_##n4##_##n5##_##n6##_##n7
 {macro_string}
+#define PYBIND11_ARG_INFO_GEN
 
 #if defined(__GNUG__)
 #pragma GCC diagnostic push
