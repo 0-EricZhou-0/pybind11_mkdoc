@@ -11,6 +11,7 @@ import sys
 import platform
 import re
 import textwrap
+import enum
 
 import ctypes.util
 
@@ -74,6 +75,15 @@ class NoFilenamesError(ValueError):
 def d(s):
     return s if isinstance(s, str) else s.decode('utf8')
 
+# FIXME: extract those to be input of the program
+mkdoc_types = {
+    'PYBIND11_DOC':      { 'name': 'doc',      'type': 'variable' },
+    'PYBIND11_ARG_TYPE': { 'name': 'arg_type', 'type': 'macro'    },
+    'PYBIND11_ARG_NAME': { 'name': 'arg_name', 'type': 'macro'    },
+}
+
+def prefixed_name(type, sanitized_name):
+    return '__%s_%s' % (mkdoc_types[type]['name'], sanitized_name)
 
 def sanitize_name(name):
     name = re.sub(r'type-parameter-0-([0-9]+)', r'T\1', name)
@@ -82,7 +92,7 @@ def sanitize_name(name):
     name = re.sub('<.*>', '', name)
     name = ''.join([ch if ch.isalnum() else '_' for ch in name])
     name = re.sub('_$', '', re.sub('_+', '_', name))
-    return '__doc_' + name
+    return name
 
 
 def process_comment(comment):
@@ -209,7 +219,7 @@ def process_comment(comment):
     return result.rstrip().lstrip('\n')
 
 
-def extract(filename, node, prefix, output):
+def extract(filename, node, prefix, docstrings, macros):
     if not (node.location.file is None or
             os.path.samefile(d(node.location.file.name), filename)):
         return 0
@@ -220,7 +230,7 @@ def extract(filename, node, prefix, output):
                 sub_prefix += '_'
             sub_prefix += d(node.spelling)
         for i in node.get_children():
-            extract(filename, i, sub_prefix, output)
+            extract(filename, i, sub_prefix, docstrings, macros)
     if node.kind in PRINT_LIST:
         comment = d(node.raw_comment) if node.raw_comment is not None else ''
         comment = process_comment(comment)
@@ -228,16 +238,27 @@ def extract(filename, node, prefix, output):
         if len(sub_prefix) > 0:
             sub_prefix += '_'
         if len(node.spelling) > 0:
-            name = sanitize_name(sub_prefix + d(node.spelling))
-            output.append((name, filename, comment))
+            sanitized_name = sanitize_name(sub_prefix + d(node.spelling))
+            arg_names = []
+            arg_types = []
+            for item in node.get_arguments():
+                arg_names.append(f'pybind11::arg(\"{item.spelling}\")')
+                arg_types.append(item.type.spelling)
+            docstrings.append((prefixed_name('PYBIND11_DOC', sanitized_name),
+                               filename, comment))
+            macros.append((prefixed_name('PYBIND11_ARG_NAME', sanitized_name),
+                           filename, ', '.join(arg_names)))
+            macros.append((prefixed_name('PYBIND11_ARG_TYPE', sanitized_name),
+                           filename, 'pybind11::overload_cast<' + ', '.join(arg_types) + '>'))
 
 
 class ExtractionThread(Thread):
-    def __init__(self, filename, parameters, output):
+    def __init__(self, filename, parameters, docstrings, macros):
         Thread.__init__(self)
         self.filename = filename
         self.parameters = parameters
-        self.output = output
+        self.docstrings = docstrings
+        self.macros = macros
         job_semaphore.acquire()
 
     def run(self):
@@ -247,7 +268,7 @@ class ExtractionThread(Thread):
             index = cindex.Index(
                 cindex.conf.lib.clang_createIndex(False, True))
             tu = index.parse(self.filename, self.parameters)
-            extract(self.filename, tu.cursor, '', self.output)
+            extract(self.filename, tu.cursor, '', self.docstrings, self.macros)
         except BaseException:
             errors_detected = True
             raise
@@ -371,20 +392,33 @@ def read_args(args):
 
 def extract_all(args):
     parameters, filenames = read_args(args)
-    output = []
+    docstrings = []
+    macros = []
     for filename in filenames:
-        thr = ExtractionThread(filename, parameters, output)
+        thr = ExtractionThread(filename, parameters, docstrings, macros)
         thr.start()
 
     print('Waiting for jobs to finish ..', file=sys.stderr)
     for i in range(job_count):
         job_semaphore.acquire()
+    return docstrings, macros
 
-    return output
 
+def write_header(docstrings, macros, out_file=sys.stdout):
 
-def write_header(comments, out_file=sys.stdout):
-    print('''/*
+    # FIXME: col_reserve is hard-coded
+    col_reserve = 57
+    macro_strings = []
+    for macro_name, macro_info in mkdoc_types.items():
+        macro_prefix, macro_postfix = "", ""
+        if macro_info['type'] == 'macro':
+            macro_prefix = '__EXPAND('
+            macro_postfix = ')'
+        macro_strings.append(
+            f"{f'#define {macro_name}(...)':{col_reserve}s}{macro_prefix}__CAT2({prefixed_name(macro_name, '')}, __EXPAND(__EXPAND(__CAT2(__DOC, __VA_SIZE(__VA_ARGS__)))(__VA_ARGS__))){macro_postfix}")
+    macro_string = "\n".join(macro_strings)
+
+    print(f'''/*
   This file contains docstrings for use in the Python bindings.
   Do not edit! They were automatically extracted by pybind11_mkdoc.
  */
@@ -394,14 +428,14 @@ def write_header(comments, out_file=sys.stdout):
 #define __VA_SIZE(...)                                   __EXPAND(__COUNT(__VA_ARGS__, 7, 6, 5, 4, 3, 2, 1, 0))
 #define __CAT1(a, b)                                     a ## b
 #define __CAT2(a, b)                                     __CAT1(a, b)
-#define __DOC1(n1)                                       __doc_##n1
-#define __DOC2(n1, n2)                                   __doc_##n1##_##n2
-#define __DOC3(n1, n2, n3)                               __doc_##n1##_##n2##_##n3
-#define __DOC4(n1, n2, n3, n4)                           __doc_##n1##_##n2##_##n3##_##n4
-#define __DOC5(n1, n2, n3, n4, n5)                       __doc_##n1##_##n2##_##n3##_##n4##_##n5
-#define __DOC6(n1, n2, n3, n4, n5, n6)                   __doc_##n1##_##n2##_##n3##_##n4##_##n5##_##n6
-#define __DOC7(n1, n2, n3, n4, n5, n6, n7)               __doc_##n1##_##n2##_##n3##_##n4##_##n5##_##n6##_##n7
-#define DOC(...)                                         __EXPAND(__EXPAND(__CAT2(__DOC, __VA_SIZE(__VA_ARGS__)))(__VA_ARGS__))
+#define __DOC1(n1)                                       n1
+#define __DOC2(n1, n2)                                   n1##_##n2
+#define __DOC3(n1, n2, n3)                               n1##_##n2##_##n3
+#define __DOC4(n1, n2, n3, n4)                           n1##_##n2##_##n3##_##n4
+#define __DOC5(n1, n2, n3, n4, n5)                       n1##_##n2##_##n3##_##n4##_##n5
+#define __DOC6(n1, n2, n3, n4, n5, n6)                   n1##_##n2##_##n3##_##n4##_##n5##_##n6
+#define __DOC7(n1, n2, n3, n4, n5, n6, n7)               n1##_##n2##_##n3##_##n4##_##n5##_##n6##_##n7
+{macro_string}
 
 #if defined(__GNUG__)
 #pragma GCC diagnostic push
@@ -412,7 +446,7 @@ def write_header(comments, out_file=sys.stdout):
 
     name_ctr = 1
     name_prev = None
-    for name, _, comment in list(sorted(comments, key=lambda x: (x[0], x[1]))):
+    for name, _, comment in list(sorted(docstrings, key=lambda x: (x[0], x[1]))):
         if name == name_prev:
             name_ctr += 1
             name = name + "_%i" % name_ctr
@@ -421,6 +455,15 @@ def write_header(comments, out_file=sys.stdout):
             name_ctr = 1
         print('\nstatic const char *%s =%sR"doc(%s)doc";' %
               (name, '\n' if '\n' in comment else ' ', comment), file=out_file)
+
+    for name, _, macro in list(sorted(macros, key=lambda x: (x[0], x[1]))):
+        if name == name_prev:
+            name_ctr += 1
+            name = name + "_%i" % name_ctr
+        else:
+            name_prev = name
+            name_ctr = 1
+        print('\n#define %s %s' % (name, macro), file=out_file)
 
     print('''
 #if defined(__GNUG__)
@@ -433,7 +476,7 @@ def mkdoc(args, width, output=None):
     if width != None:
         global docstring_width
         docstring_width = int(width)
-    comments = extract_all(args)
+    docstrings, macros = extract_all(args)
     if errors_detected:
         return
 
@@ -441,7 +484,7 @@ def mkdoc(args, width, output=None):
         try:
             os.makedirs(os.path.dirname(os.path.abspath(output)), exist_ok=True)
             with open(output, 'w') as out_file:
-                write_header(comments, out_file)
+                write_header(docstrings, macros, out_file)
         except:
             # In the event of an error, don't leave a partially-written
             # output file.
@@ -451,4 +494,4 @@ def mkdoc(args, width, output=None):
                 pass
             raise
     else:
-        write_header(comments)
+        write_header(docstrings, macros)
