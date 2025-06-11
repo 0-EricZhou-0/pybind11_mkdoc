@@ -218,6 +218,12 @@ def process_comment(comment):
                     wrapper.initial_indent = wrapper.subsequent_indent = ''
     return result.rstrip().lstrip('\n')
 
+def get_default_value(arg_cursor):
+    tokens = list(arg_cursor.get_tokens())
+    for i, tok in enumerate(tokens):
+        if tok.spelling == '=' and i + 1 < len(tokens):
+            return ' '.join(t.spelling for t in tokens[i + 1:])
+    return None
 
 def extract(filename, node, prefix, docstrings, macros):
     if not (node.location.file is None or
@@ -242,7 +248,11 @@ def extract(filename, node, prefix, docstrings, macros):
             arg_names = []
             arg_types = []
             for item in node.get_arguments():
-                arg_names.append(f'pybind11::arg(\"{item.spelling}\")')
+                default_val = get_default_value(item)
+                if default_val is not None:
+                    arg_names.append(f'pybind11::arg(\"{item.spelling}\") = {default_val}')
+                else:
+                    arg_names.append(f'pybind11::arg(\"{item.spelling}\")')
                 arg_types.append(item.type.spelling)
             docstrings.append((prefixed_name('PYBIND11_DOC', sanitized_name),
                                filename, comment))
