@@ -79,7 +79,7 @@ def d(s):
 mkdoc_types = {
     'PYBIND11_DOC':      { 'name': 'doc',      'type': 'variable' },
     'PYBIND11_ARG_TYPE': { 'name': 'ARG_TYPE', 'type': 'macro'    },
-    'PYBIND11_ARG_NAME': { 'name': 'ARG_TYPE', 'type': 'macro'    },
+    'PYBIND11_ARG_NAME': { 'name': 'ARG_NAME', 'type': 'macro'    },
 }
 
 def prefixed_name(type, sanitized_name):
