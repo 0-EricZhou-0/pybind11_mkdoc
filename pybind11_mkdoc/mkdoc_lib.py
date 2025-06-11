@@ -78,8 +78,8 @@ def d(s):
 # FIXME: extract those to be input of the program
 mkdoc_types = {
     'PYBIND11_DOC':      { 'name': 'doc',      'type': 'variable' },
-    'PYBIND11_ARG_TYPE': { 'name': 'arg_type', 'type': 'macro'    },
-    'PYBIND11_ARG_NAME': { 'name': 'arg_name', 'type': 'macro'    },
+    'PYBIND11_ARG_TYPE': { 'name': 'ARG_TYPE', 'type': 'macro'    },
+    'PYBIND11_ARG_NAME': { 'name': 'ARG_TYPE', 'type': 'macro'    },
 }
 
 def prefixed_name(type, sanitized_name):
